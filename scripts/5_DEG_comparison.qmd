@@ -1,0 +1,554 @@
+---
+title: "Gene Expression Comparison"
+author: "Gustav Joas"
+format: html
+editor: visual
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+---
+
+```{r, global.options, include=FALSE}
+# Global knitr settings 
+# Set up figures and chunks messages
+
+knitr::opts_knit$set(
+  echo = TRUE,
+  root.dir = getwd(),
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H",
+  warning = FALSE,
+  message = FALSE
+)
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H"
+)
+
+
+result.dir <- paste0("output/6_DEG_comparison/", Sys.Date(), "/")
+figures.dir <- paste0(result.dir, "figures/")
+
+# Create result.dir with date if not existent
+ifelse(isFALSE(dir.exists(result.dir)),
+  dir.create(result.dir, recursive = TRUE),
+  "Result directory for today exists already!"
+)
+
+# Create figures.dir with date if not existent
+ifelse(isFALSE(dir.exists(figures.dir)),
+  dir.create(figures.dir, recursive = TRUE),
+  "Figures directory for today exists already!"
+)
+
+options(stringsAsFactors = FALSE)
+```
+
+## Load packages
+
+```{r}
+#| label: load-packages
+#| include: false
+
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(ggplot2)
+  library(ggVennDiagram)
+  library(ggrepel)
+  library(purrr)
+  library(Hmisc)
+  library(ggcorrplot)
+})
+
+```
+
+## Load Data
+
+Result from DESEq2.
+
+```{r}
+# Define the common base path for all files
+base_path <- "output/4_deseq_analysis/"
+
+# Define file paths for each group and time point, appending to the base path
+group_data_paths <- list(
+    group1 = list(
+        primary = paste0(base_path, "timepoint_24_primary_vs_0_primary_group_1.csv"),
+        boost = paste0(base_path, "timepoint_24_boost_vs_0_primary_group_1.csv")
+    ),
+    group2 = list(
+        primary = paste0(base_path, "timepoint_24_primary_vs_0_primary_group_2.csv"),
+        boost = paste0(base_path, "timepoint_24_boost_vs_0_primary_group_2.csv")
+    ),
+    group3 = list(
+        primary = paste0(base_path, "timepoint_24_primary_vs_0_primary_group_3.csv"),
+        boost = paste0(base_path, "timepoint_24_boost_vs_0_primary_group_3.csv")
+    )
+)
+
+# Load all data into a nested list
+vaccine_data_list <- lapply(group_data_paths, function(group) {
+    lapply(group, read_csv)
+})
+
+```
+
+# DEG Comparison
+
+## Venn Diagram of DEGs
+
+Prepare data. Combine DEGs data from primary and boost for each group.
+
+```{r}
+# Filter for significant DEGs (padj < 0.05)
+sig_deg_list <- lapply(vaccine_data_list, function(group) {
+    lapply(group, function(timepoint) {
+        timepoint %>%
+            dplyr::filter(padj < 0.05)
+    })
+})
+
+# Create a list of DEGs for each subgroup (primary and boost) in each group
+deg_list <- lapply(sig_deg_list, function(group) {
+    lapply(group, function(timepoint) {
+        timepoint$gene_id
+    })
+})
+
+```
+
+Compare prime and boost within each group
+
+```{r}
+# Define a single ring color for each group
+group_ring_colors <- list(
+  group1 = "#7392C0", 
+  group2 = "#997FAD", 
+  group3 = "#B6D47C"  
+)
+
+# Ensure the output directory exists
+venn_dir <- paste0(figures.dir, "venn_diagrams/")
+dir.create(venn_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Loop over each group and generate a Venn diagram
+for (group_name in names(deg_list)) {
+  # Extract the primary and boost DEGs for the current group
+  test_deg_list <- list(
+    Boost = deg_list[[group_name]][["boost"]], 
+    Primary = deg_list[[group_name]][["primary"]]
+  )
+  
+  # Get the single custom color for the current group
+  ring_color <- group_ring_colors[[group_name]]
+  
+  # Create a Venn diagram with custom ring color and no outside text
+  p <- ggVennDiagram(
+        test_deg_list, 
+        label_alpha = 0,                     
+        set_color = ring_color               
+      ) +
+    labs(title = paste(group_name)) +
+    scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+    theme(legend.position = "none")          # Remove the legend
+
+  print(p)
+  
+  # Save the plot 
+  ggsave(
+    filename = paste0(venn_dir, group_name, "_VennDiagram.pdf"), 
+    plot = p, 
+    width = 6, 
+    height = 4, 
+    device = "pdf"
+  )
+  
+  message("Saved: ", paste0(venn_dir, group_name, "_VennDiagram.pdf"))
+}
+```
+
+### Supplemental Figure 3A
+
+Combine prime and boost between groups
+
+```{r}
+# Compare the three primary subgroups
+primary_deg_list <- list(
+  Group1_Primary = deg_list[["group1"]][["primary"]],
+  Group2_Primary = deg_list[["group2"]][["primary"]],
+  Group3_Primary = deg_list[["group3"]][["primary"]]
+)
+
+# Create Venn diagram for primary subgroups with custom colors
+p_primary <- ggVennDiagram(primary_deg_list, 
+                           label_alpha = 0,
+                           category.names = c("Group 1 Primary", "Group 2 Primary", "Group 3 Primary"),
+                           set_color = c("#7392C0", "#997FAD", "#B6D47C")) +  # Custom colors
+                          scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+  labs(title = "Primary Gene Overlap")
+
+# Show the primary plot
+print(p_primary)
+
+ggsave(
+  filename = paste0(figures.dir, "Primary_VennDiagram.pdf"), 
+  plot = p_primary, 
+  width = 6, 
+  height = 4
+)
+
+
+# Compare the three boost subgroups
+boost_deg_list <- list(
+  Group1_Boost = deg_list[["group1"]][["boost"]],
+  Group2_Boost = deg_list[["group2"]][["boost"]],
+  Group3_Boost = deg_list[["group3"]][["boost"]]
+)
+
+# Create Venn diagram for boost subgroups with custom colors
+p_boost <- ggVennDiagram(boost_deg_list,
+                         label_alpha = 0,
+                         category.names = c("Group 1 Boost", "Group 2 Boost", "Group 3 Boost"),
+                         set_color = c("#7392C0", "#997FAD", "#B6D47C")) +  # Custom colors
+                          scale_fill_gradient(low = "#F4FAFE", high = "#4174AC") +
+  labs(title = "Boost Gene Overlap") 
+
+# Show the boost plot
+print(p_boost)
+
+ggsave(
+  filename = paste0(figures.dir, "Boost_VennDiagram.pdf"), 
+  plot = p_boost, 
+  width = 6, 
+  height = 4
+)
+```
+
+```{r}
+# Identify shared and unique genes between the three groups
+shared_primary_genes <- Reduce(intersect, primary_deg_list)
+shared_boost_genes <- Reduce(intersect, boost_deg_list)
+
+# Unique genes for each group (Primary)
+unique_primary_genes <- lapply(names(primary_deg_list), function(group) {
+  setdiff(primary_deg_list[[group]], unlist(primary_deg_list[-which(names(primary_deg_list) == group)]))
+})
+
+names(unique_primary_genes) <- names(primary_deg_list)
+
+# Unique genes for each group (Boost)
+unique_boost_genes <- lapply(names(boost_deg_list), function(group) {
+  setdiff(boost_deg_list[[group]], unlist(boost_deg_list[-which(names(boost_deg_list) == group)]))
+})
+
+names(unique_boost_genes) <- names(boost_deg_list)
+
+```
+
+# Compare Fold Changes
+
+Scatterplot showing log2 fold changes between primary and boost
+
+```{r}
+# Merge primary and boost data with padj values included
+primary_df <- vaccine_data_list[["group3"]][["primary"]] %>% 
+  dplyr::select(gene_id, log2FoldChange, padj) %>%
+  rename(log2FC_primary = log2FoldChange, padj_primary = padj)
+
+boost_df <- vaccine_data_list[["group3"]][["boost"]] %>% 
+  dplyr::select(gene_id, log2FoldChange, padj) %>%
+  rename(log2FC_boost = log2FoldChange, padj_boost = padj)
+
+# Merge both dataframes
+merged_df <- inner_join(primary_df, boost_df, by = "gene_id")
+
+# Add significance classification for coloring
+merged_df <- merged_df %>%
+  mutate(Color_Status = case_when(
+    padj_primary < 0.05 & log2FC_primary > 1 & padj_boost < 0.05 & log2FC_boost > 1 ~ "Upregulated in Both",
+    padj_primary < 0.05 & log2FC_primary < -1 & padj_boost < 0.05 & log2FC_boost < -1 ~ "Downregulated in Both",
+    padj_primary < 0.05 & log2FC_primary > 1 ~ "Upregulated in Primary Only",
+    padj_boost < 0.05 & log2FC_boost > 1 ~ "Upregulated in Boost Only",
+    padj_primary < 0.05 & log2FC_primary < -1 ~ "Downregulated in Primary Only",
+    padj_boost < 0.05 & log2FC_boost < -1 ~ "Downregulated in Boost Only",
+    TRUE ~ "Not Significant"
+  )) 
+```
+
+```{r}
+# Create scatterplot with larger legend text and point size
+ggplot(merged_df, aes(x = log2FC_primary, y = log2FC_boost, color = Color_Status)) +
+  geom_point(size = 2) +  # Adjust the size of the points in the scatterplot
+  scale_color_manual(values = c(
+    "Upregulated in Both" = "red",
+    "Downregulated in Both" = "blue",
+    "Upregulated in Primary Only" = "orange",
+    "Upregulated in Boost Only" = "darkred",
+    "Downregulated in Primary Only" = "lightblue",
+    "Downregulated in Boost Only" = "darkblue",
+    "Not Significant" = "grey80"
+  )) +
+  labs(x = "log2 Fold Change (Primary)", 
+       y = "log2 Fold Change (Boost)",
+       title = "Scatterplot of log2 Fold Changes Between Primary and Boost",
+       color = "Differential Expression Status") +  # Legend title
+  theme_minimal() +
+  theme(
+    legend.text = element_text(size = 14),  # Increase legend text size
+    legend.title = element_text(size = 16, face = "bold"),  # Increase and bold the legend title
+    legend.key.size = unit(2, "lines")  # Increase legend key (color point) size
+  )
+```
+
+### Figure 2B
+
+Set which time point to plot
+
+```{r}
+# Define TIMEPOINT variable: set to either "primary" or "boost" for downstream analysis
+  TIMEPOINT <- "primary"
+# TIMEPOINT <- "boost"
+```
+
+Prepare data frame
+
+```{r}
+# Extract data for each group based on TIMEPOINT}
+
+group1_df <- vaccine_data_list[["group1"]][[TIMEPOINT]] %>% 
+  dplyr::select(gene_id, log2FoldChange, padj, symbol) %>%
+  rename(log2FC_group1 = log2FoldChange, padj_group1 = padj)
+
+group2_df <- vaccine_data_list[["group2"]][[TIMEPOINT]] %>% 
+  dplyr::select(gene_id, log2FoldChange, padj, symbol) %>%
+  rename(log2FC_group2 = log2FoldChange, padj_group2 = padj)
+
+group3_df <- vaccine_data_list[["group3"]][[TIMEPOINT]] %>% 
+  dplyr::select(gene_id, log2FoldChange, padj, symbol) %>%
+  rename(log2FC_group3 = log2FoldChange, padj_group3 = padj)
+
+# Merge all three data frames based on gene_id
+merged_df <- purrr::reduce(list(group1_df, group2_df, group3_df), inner_join, by = "gene_id") %>% 
+  dplyr::select(-symbol.y, -symbol.x)
+
+# Take the max absolute log2FoldChange from Group 2 or Group 3
+merged_df <- merged_df %>%
+  mutate(log2FC_modified = ifelse(abs(log2FC_group2) > abs(log2FC_group3), log2FC_group2, log2FC_group3),
+         padj_modified = pmin(padj_group2, padj_group3, na.rm = TRUE))  # Take the most significant p-value
+
+# Assign color categories based on DEG status in Group 1, Group 2, Group 3, or all three
+merged_df <- merged_df %>%
+  mutate(Color_Status = case_when(
+    # Common DEGs in all three groups
+    padj_group1 < 0.05 & padj_group2 < 0.05 & padj_group3 < 0.05 ~ "Common in All Three",
+    # Common DEGs in Group 2 & 3, but NOT in Group 1
+    !(padj_group1 < 0.05) & padj_group2 < 0.05 & padj_group3 < 0.05 ~ "Common in Modified Groups 2 & 3",
+    # Unique to Group 1 (NOT significant in Group 2 & 3)
+    padj_group1 < 0.05 & !(padj_group2 < 0.05) & !(padj_group3 < 0.05) ~ "DEG Unmodified 160μg Only",
+    # Unique to Group 2 (NOT significant in Group 1 & 3)
+    !(padj_group1 < 0.05) & padj_group2 < 0.05 & !(padj_group3 < 0.05) ~ "DEG Modified 400μg Only",
+    # Unique to Group 3 (NOT significant in Group 1 & 2)
+    !(padj_group1 < 0.05) & !(padj_group2 < 0.05) & padj_group3 < 0.05 ~ "DEG Modified 800μg Only",
+    # Not significant in any group
+    TRUE ~ "Not Significant"
+  ))
+```
+
+```{r}
+# Determine maximum absolute value for symmetric axis limits
+axis_limit <- max(14, 14)
+
+# Define color palette
+color_palette <- c(
+    "Common in All Three" = "#E41A1C",
+    "DEG Unmodified 160μg Only" = "#5B88C2",
+    "DEG Modified 400μg Only" = "#A58BD4",
+    "DEG Modified 800μg Only" = "#BEDE86",
+    "Common in Modified Groups 2 & 3" = "#FF7F00",  # New category (orange)
+    "Not Significant" = "grey70"
+)
+```
+
+Plot Figure 2B
+
+```{r}
+plot <- ggplot(merged_df, aes(x = log2FC_group1, y = log2FC_modified, color = Color_Status)) +
+  
+  # 1. Grey points first (background layer)
+  geom_point(data = merged_df %>% filter(Color_Status == "Not Significant"), 
+             size = 2, alpha = 0.3, show.legend = FALSE) +  
+  
+  # 2. Colored DEG points on top
+  geom_jitter(data = merged_df %>% filter(Color_Status != "Not Significant"), 
+              width = 0.2, height = 0.2, size = 2) +
+  
+  # 3. Manual colors
+  scale_color_manual(values = color_palette) +
+  
+  # 4. Axes and theme
+  scale_x_continuous(limits = c(-6, axis_limit), 
+                     breaks = seq(-6, axis_limit, by = 2)) + 
+  scale_y_continuous(limits = c(-6, axis_limit), 
+                     breaks = seq(-6, axis_limit, by = 2)) +
+  labs(
+    x = "log2 Fold Change (Group 1 - Unmodified)", 
+    y = "log2 Fold Change (Group 2 or 3 - Modified)",
+    title = paste("Comparison of Unmodified and Modified Vaccine Responses (", 
+                  ifelse(TIMEPOINT == "primary", "Primary", "Boost"), ")", sep = ""),
+    color = "DEG Classification"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14, face = "bold"),
+    axis.title.y = element_text(size = 14, face = "bold"),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.key.size = unit(1.5, "lines"),
+    panel.grid.major = element_line(color = "grey90", size = 0.5),
+    panel.grid.minor = element_blank()
+  ) +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "grey40", linewidth = 1) +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "grey40", linewidth = 1) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey40", linewidth = 1)
+
+# Save the plot
+plot_filename <- paste0(figures.dir, "DEG_Comparison_", TIMEPOINT, "_", Sys.Date(), ".pdf")
+ggsave(filename = plot_filename, 
+       plot = plot, 
+       width = 8, height = 5, dpi = 300, bg = "white")
+
+message("Plot saved to: ", plot_filename)
+
+plot
+```
+
+### Correlation Matrix
+
+Including all genes
+
+```{r}
+# Compute correlation and p-values
+rcorr_result <- rcorr(as.matrix(merged_df %>% dplyr::select(log2FC_group1, log2FC_group2, log2FC_group3)), type = "pearson")
+
+# Extract correlation matrix
+cor_matrix <- rcorr_result$r  
+
+# Extract p-values
+p_matrix <- rcorr_result$P
+
+# Convert p-values to significance levels
+p_signif <- ifelse(p_matrix < 0.001, "***", 
+                   ifelse(p_matrix < 0.01, "**", 
+                          ifelse(p_matrix < 0.05, "*", "")))
+
+# Replace very small p-values with "< 0.001"
+p_matrix[p_matrix < 0.001] <- "< 0.001"
+
+# Define new names for the matrix
+new_names <- c("Unmodified 160μg", "Modified 400μg", "Modified 800μg")
+
+colnames(cor_matrix) <- new_names
+rownames(cor_matrix) <- new_names
+colnames(p_matrix) <- new_names
+rownames(p_matrix) <- new_names
+
+print(cor_matrix)  
+print(p_matrix)    
+```
+
+### Figure 2C
+
+```{r}
+corr_plot <- ggcorrplot(cor_matrix, 
+         method = "square",        
+         lab = TRUE,               # Show correlation values
+         type = "lower",           # Show lower triangle only
+         p.mat = p_matrix,  # Add significance levels
+         insig = "blank",          # Remove insignificant values
+         colors = c("#6D9EC1", "white", "#E46726"),  # Color gradient
+         title = paste("Pearson Correlation of Log2 Fold Changes (", 
+                       ifelse(TIMEPOINT == "primary", "Primary", "Boost"), ")", sep = ""),
+         ggtheme = theme_void())  # Use a clean theme
+
+# save plot
+cor_plot_filename <- paste0(figures.dir, "Correlation_AllGenes_", TIMEPOINT, "_", Sys.Date(), ".pdf")
+
+ggsave(filename = cor_plot_filename, 
+       plot = corr_plot,
+       width = 8, height = 5, dpi = 300, bg = "white")
+
+message("Correlation plot saved: ", cor_plot_filename)
+
+```
+
+Including only DEGs
+
+```{r}
+# Filter only DEGs (exclude "Not Significant" genes)
+deg_df <- merged_df %>% filter(Color_Status != "Not Significant")
+
+# Compute correlation and p-values for DEGs only
+rcorr_deg_result <- rcorr(as.matrix(deg_df %>% dplyr::select(log2FC_group1, log2FC_group2, log2FC_group3)), 
+                          type = "pearson")
+
+# Extract correlation matrix
+cor_deg_matrix <- rcorr_deg_result$r  
+
+# Extract p-values
+p_deg_matrix <- rcorr_deg_result$P
+
+# Convert p-values to significance levels
+p_signif_deg <- ifelse(p_deg_matrix < 0.001, "***", 
+                       ifelse(p_deg_matrix < 0.01, "**", 
+                              ifelse(p_deg_matrix < 0.05, "*", "")))
+
+# Replace very small p-values with "< 0.001"
+p_deg_matrix[p_deg_matrix < 0.001] <- "< 0.001"
+
+# Rename matrix labels
+colnames(cor_deg_matrix) <- new_names
+rownames(cor_deg_matrix) <- new_names
+colnames(p_deg_matrix) <- new_names
+rownames(p_deg_matrix) <- new_names
+
+# Print correlation results for DEGs
+print(cor_deg_matrix)
+print(p_deg_matrix)
+```
+
+```{r}
+corr_deg_plot <- ggcorrplot(cor_deg_matrix, 
+           method = "square",        
+           lab = TRUE,               # Show correlation values
+           type = "lower",           # Show lower triangle only
+           p.mat = p_deg_matrix,     # Add significance levels
+           insig = "blank",          # Remove insignificant values
+           colors = c("#6D9EC1", "white", "#E46726"),  # Color gradient
+           title = paste("Pearson Correlation of Log2 Fold Changes (DEGs Only - ", 
+                   ifelse(TIMEPOINT == "primary", "Primary", "Boost"), ")", sep = ""),
+           ggtheme = theme_void())  
+
+# save plot
+cor_deg_plot_filename <- paste0(figures.dir, "Correlation_DEGsOnly_", TIMEPOINT, "_", Sys.Date(), ".png")
+
+# Save the DEGs correlation plot
+ggsave(filename = cor_deg_plot_filename, 
+       plot = corr_deg_plot,  
+       width = 8, height = 5, dpi = 300, bg = "white")
+
+message("DEGs correlation plot saved: ", cor_deg_plot_filename)
+
+```
+
+```{r}
+# Save session info
+session_info_path <- file.path(result.dir, "session_info.txt")
+writeLines(capture.output(sessionInfo()), session_info_path)
+```
