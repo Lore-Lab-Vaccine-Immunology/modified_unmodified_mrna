@@ -1,0 +1,209 @@
+---
+title: "gag analysis"
+format: html
+---
+
+```{r, global.options, include=FALSE}
+# Global knitr settings 
+# Set up figures and chunks messages
+
+knitr::opts_knit$set(
+  echo = TRUE,
+  root.dir = getwd(),
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H",
+  warning = FALSE,
+  message = FALSE
+)
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H"
+)
+
+
+result.dir <- paste0("output/gag_detection/", Sys.Date(), "/")
+figures.dir <- paste0(result.dir, "figures/")
+
+# Create result.dir with date if not existent
+ifelse(isFALSE(dir.exists(result.dir)),
+  dir.create(result.dir, recursive = TRUE),
+  "Result directory for today exists already!"
+)
+
+# Create figures.dir with date if not existent
+ifelse(isFALSE(dir.exists(figures.dir)),
+  dir.create(figures.dir, recursive = TRUE),
+  "Figures directory for today exists already!"
+)
+
+options(stringsAsFactors = FALSE)
+```
+
+## Load packages
+
+```{r}
+#| label: load-packages
+#| includes: FALSE
+
+suppressPackageStartupMessages({
+    library(ggplot2)
+    library(dplyr)
+    library(tidyr)
+    library(Rsamtools)
+    library(ggsci)
+})
+```
+
+## Define file paths
+
+```{r}
+# Set file paths
+cfg <- list(
+  gene_counts_file = "data/nf_core/Mmul10_gag_env/salmon.merged.gene_tpm.tsv",
+  transcript_counts_file = "data/nf_core/Mmul10_gag_env/salmon.merged.transcript_counts.rds",
+  metadata_file = "data/metadata/metadata_samples.rds"
+)
+```
+## Load data
+
+```{r}
+gene_counts <- read.delim(cfg$gene_counts_file, header = TRUE, row.names = 1, sep = "\t")
+
+transcript_counts <- readRDS(cfg$transcript_counts_file)
+# Inspect the data
+head(gene_counts)
+```
+
+```{r}
+row1 <- gene_counts["gag_gene", ]
+row2 <- gene_counts["env_gene", ]
+```
+
+```{r}
+combined_data <- rbind(row1, row2)
+
+primary <- combined_data[, 1:15]
+boost <- combined_data[, 16:43]
+```
+
+```{r}
+# Load sample metadata
+metadata <- readRDS(cfg$metadata_file) %>% 
+  dplyr::select(-core_ID, -date, -concentration, -RIN, -UDF_customerID)
+```
+
+## Merge counts and metadata
+
+```{r}
+# Reshape count data to long format
+count_data_long <- combined_data %>%
+  pivot_longer(cols = -gene_name, names_to = "NGI_sampleID", values_to = "count")
+
+# Merge with metadata
+merged_data <- left_join(count_data_long, metadata, by = "NGI_sampleID") %>% 
+  dplyr::select(-NGI_sampleID)
+```
+
+```{r}
+# Reorder animal_ID by group
+merged_data <- merged_data %>%
+  arrange(group, animal_ID) %>%  # Ensure data is sorted by group first
+  mutate(
+    animal_ID = factor(animal_ID, levels = unique(animal_ID)),
+    group = as.factor(group) 
+  )
+```
+
+## Calculate log2 fold change
+
+With pseudocount 1 to avoid dividing by zero
+
+```{r}
+# Calculate log2 fold change for gag_gene
+log2fc_gag <- merged_data %>%
+  filter(gene_name == "gag_gene") %>% 
+  pivot_wider(names_from = timepoint, values_from = count) %>%  # Reshape to wide format
+  replace_na(list(`0_primary` = 0, `24_primary` = 0, `24_boost` = 0)) %>%
+  mutate(
+    log2FC_24_primary = log2((`24_primary` + 1) / (`0_primary` + 1)),  # 24_primary vs 0_primary
+    log2FC_24_boost = log2((`24_boost` + 1) / (`0_primary` + 1))       # 24_boost vs 0_primary
+  ) %>%
+  pivot_longer(cols = starts_with("log2FC"), names_to = "comparison", values_to = "log2FC") %>% # Long format for plotting
+  mutate(
+    comparison = factor(comparison, levels = c("log2FC_24_primary", "log2FC_24_boost"))  # Reorder levels
+  )
+
+# Ensure animal_ID is ordered by group
+log2fc_gag <- log2fc_gag %>%
+  arrange(group, animal_ID) %>%
+  mutate(
+    animal_ID = factor(animal_ID, levels = unique(animal_ID)),
+    group = as.factor(group)
+  )
+```
+
+## Plot: Log2 Fold Change (Supplemental Figure 3C)
+### Supplemental Figure 3C
+
+```{r}
+comparison_colors <- c(
+  "log2FC_24_primary" = "#374E55",  # grey-blue
+  "log2FC_24_boost"  = "#DF8F44"   # golden-orange
+)
+
+log2fc_gag <- log2fc_gag %>%
+  mutate(group = recode(group,
+                        "1" = "Unmodified 160μg",
+                        "2" = "Modified 400μg",
+                        "3" = "Modified 800μg"))
+
+# Create the plot
+log2fc_plot <- ggplot(log2fc_gag, aes(x = animal_ID, y = log2FC, fill = comparison)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  facet_grid(~group, scales = "free_x", space = "free") +
+  scale_fill_manual(values = comparison_colors, labels = c("24h Primary", "24h Boost")) +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Log2 Fold Change of *gag* Gene Expression by Animal",
+    subtitle = "Comparison of 24h post-primary and 24h post-boost vs baseline (0h)",
+    x = NULL,
+    y = "Log2 Fold Change",
+    fill = NULL
+  ) +
+  theme(
+    axis.text.x = element_blank(),
+    strip.background = element_rect(fill = "white", color = "black", linewidth = 0.5),
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    legend.text = element_text(size = 10),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11, margin = margin(b = 10)),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.spacing = unit(1, "lines")
+  )
+
+# Save the plot
+ggsave(
+  filename = paste0(figures.dir, "log2fc_gag_gene_plot.pdf"),
+  plot = log2fc_plot,
+  width = 10, height = 6, dpi = 300
+)
+
+log2fc_plot
+
+```
+
+```{r}
+session_info_path <- file.path(result.dir, "session_info.txt")
+
+writeLines(capture.output(sessionInfo()), session_info_path)
+```
