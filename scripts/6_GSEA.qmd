@@ -1,0 +1,709 @@
+---
+title: "Gene Set Enrichment Analysis"
+author: "Gustav Joas"
+format: html
+editor: visual
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+---
+
+```{r, global.options, include=FALSE}
+# Global knitr settings 
+# Set up figures and chunks messages
+
+knitr::opts_knit$set(
+  echo = TRUE,
+  root.dir = getwd(),
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H",
+  warning = FALSE,
+  message = FALSE
+)
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H"
+)
+
+
+result.dir <- paste0("output/6_GSEA/", Sys.Date(), "/")
+figures.dir <- paste0(result.dir, "figures/")
+
+# Create result.dir with date if not existent
+ifelse(isFALSE(dir.exists(result.dir)),
+  dir.create(result.dir, recursive = TRUE),
+  "Result directory for today exists already!"
+)
+
+# Create figures.dir with date if not existent
+ifelse(isFALSE(dir.exists(figures.dir)),
+  dir.create(figures.dir, recursive = TRUE),
+  "Figures directory for today exists already!"
+)
+
+options(stringsAsFactors = FALSE)
+```
+
+## Load packages
+
+```{r}
+#| label: load-packages
+#| include: false
+
+suppressPackageStartupMessages({
+      library(dplyr)
+      library(stringr)    
+      library(readr)
+      library(tibble)
+      library(clusterProfiler)
+      library(org.Mmu.eg.db)
+      library(org.Hs.eg.db)
+      library(enrichplot)
+      library(pheatmap)
+      library(msigdbr)
+      library(ReactomePA)
+      library(purrr)
+      library(RColorBrewer)
+      library(orthogene)
+})
+```
+
+## Load data
+
+The data here was filtered for genes with a lfcThreshold of 1.
+
+```{r}
+# Define the common base path for all files
+base_path <- "output/4_deseq_analysis/"
+
+# Define file paths for each group and time point, appending to the base path
+group_data_paths <- list(
+    group1 = list(
+        primary = paste0(base_path, "timepoint_24_primary_vs_0_primary_group_1.csv"),
+       boost = paste0(base_path, "timepoint_24_boost_vs_0_primary_group_1.csv")
+    ),
+    group2 = list(
+        primary = paste0(base_path, "timepoint_24_primary_vs_0_primary_group_2.csv"),
+        boost = paste0(base_path, "timepoint_24_boost_vs_0_primary_group_2.csv")
+    ),
+    group3 = list(
+        primary = paste0(base_path, "timepoint_24_primary_vs_0_primary_group_3.csv"),
+        boost = paste0(base_path, "timepoint_24_boost_vs_0_primary_group_3.csv")
+    )
+)
+
+# Load all data into a nested list
+vaccine_data_list <- lapply(group_data_paths, function(group) {
+    lapply(group, read_csv)
+})
+
+```
+
+# GSEA
+
+## BTMs
+
+GSEA using Blood Transcriptome modules presented in [Li et al. 2014](10.1038/ni.2789).
+
+• Prepare the ranked gene list. • Run GSEA using GSEA() with the Blood Transcriptome Modules. • Return the results.
+
+```{r}
+run_gsea <- function(data, gene_set) {
+    # Prepare the ranked gene list based on log2 fold change
+    ranked_gene_list <- data$log2FoldChange
+    names(ranked_gene_list) <- data$gene_name.x  # Use the column that matches BTM identifiers
+    ranked_gene_list <- sort(ranked_gene_list, decreasing = TRUE)
+    
+    # Run GSEA with BTM gene sets
+    gsea_results <- GSEA(
+        geneList = ranked_gene_list,
+        TERM2GENE = gene_set,
+        minGSSize = 10,
+        maxGSSize = 500,
+        pvalueCutoff = 0.05,
+        pAdjustMethod = "BH"
+    )
+    
+    return(as.data.frame(gsea_results))
+}
+```
+
+**Run GSEA on Each Dataset in the Nested List**
+
+Apply the run_gsea function to each dataset within each group. Modify run_gsea() to adjust parameters specifically for each group/time point.
+
+```{r}
+# Load the BTM gene sets for GSEA
+btm_gene_sets <- read.gmt("data/blood_transcription_module/BTM_for_GSEA_20131008.gmt")
+
+# Run GSEA on each group and time point
+gsea_results_list <- lapply(vaccine_data_list, function(group) {
+    lapply(group, run_gsea, gene_set = btm_gene_sets)
+})
+```
+
+**Prepare the Combined Heatmap Data**
+
+Now extract the NES values and reshape them for the heatmap, creating separate columns for each group and time point.
+
+```{r}
+# Extract and reshape NES values
+combined_gsea_df <- do.call(rbind, lapply(names(gsea_results_list), function(group_name) {
+    do.call(rbind, lapply(names(gsea_results_list[[group_name]]), function(timepoint) {
+        data <- gsea_results_list[[group_name]][[timepoint]][, c("ID", "NES")]
+        data$dataset <- paste(group_name, timepoint, sep = "_")
+        return(data)
+    }))
+}))
+
+# Reshape for heatmap
+heatmap_data <- combined_gsea_df %>%
+    tidyr::pivot_wider(names_from = dataset, values_from = NES, values_fill = 0) %>%
+    tibble::column_to_rownames("ID")
+```
+
+```{r}
+# Convert row names to a column, filter, and then remove "TBA" rows
+heatmap_data <- heatmap_data %>%
+    rownames_to_column("module") %>%          # Convert row names to a column named "module"
+    filter(!str_detect(module, "TBA")) %>%    # Filter out rows where "module" contains "TBA"
+    column_to_rownames("module")              # Convert the "module" column back to row names
+```
+
+**Plot the Heatmap**
+
+```{r}
+# Define color palette
+my_palette <- colorRampPalette(c("#265891", "white", "#B80F20"))(100)
+
+# Open PDF to save heatmap
+pdf(file = paste0(figures.dir, "combined_BTM_enrichment_heatmap_all_groups.pdf"), height = 10, width = 8)
+
+# Plot heatmap
+pheatmap(
+    heatmap_data,
+    color = my_palette,
+    cluster_rows = TRUE,
+    cluster_cols = FALSE,
+    cellwidth = 15,
+    cellheight = 10,
+    border_color = "black",
+    fontsize_row = 8,
+    fontsize_col = 8,
+    main = "Combined GSEA BTM Enrichment Heatmap"
+)
+
+# Close PDF device
+dev.off()
+```
+
+### Figure 2D
+
+```{r}
+# Define a diverging color palette with blue for negative and red for positive values
+my_palette <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(20)
+
+# Define breaks to distinguish between negative, zero, and positive NES values
+breaks <- seq(-3, 3, length.out = 21)
+
+# Open PDF to save the improved heatmap with diverging colors
+pdf(file = paste0(figures.dir, "combined_BTM_enrichment_heatmap_all_groups_improved_v4.pdf"), height = 10, width = 8)
+
+# Plot the heatmap with the diverging color palette and defined breaks
+pheatmap(
+    heatmap_data,
+    color = my_palette,
+    breaks = breaks,
+    cluster_rows = TRUE,
+    cluster_cols = FALSE,
+    cellwidth = 15,
+    cellheight = 10,
+    border_color = "black",
+    fontsize_row = 9,
+    fontsize_col = 9,
+    angle_col = "45",  # Rotate column labels for better readability
+    main = "Combined GSEA BTM Enrichment Heatmap"
+)
+
+# Close PDF device to save the plot
+dev.off()
+```
+
+# Wikipathways
+
+## Prepare gene list
+
+Convert orthologues and prepare gene list for Wikipathways
+
+```{r}
+# create gene list for downstream gsea
+convert_and_rank_genes <- function(gene_df, 
+                                   gene_id_col = "gene_id",
+                                   ranking_col = "log2FoldChange",
+                                   input_species = "macaca mulatta",
+                                   output_species = "Homo sapiens",
+                                   org_db = org.Hs.eg.db) {
+  
+  # Convert Macaque Gene IDs to Human Orthologs
+  converted_genes <- orthogene::convert_orthologs(
+    gene_df = gene_df,
+    gene_input = gene_id_col,
+    gene_output = "dict",
+    input_species = input_species,
+    output_species = output_species,
+    method = "gprofiler"
+  )
+  
+  # Convert named list to tibble
+  gene_map <- tibble(
+    gene_id = names(converted_genes), 
+    human_gene_name = converted_genes
+  )
+
+  # Convert human gene symbols to Entrez IDs to work for Wiki pathways
+  gene_map_entrez <- bitr(
+    gene_map$human_gene_name,
+    fromType = "SYMBOL",
+    toType = "ENTREZID",
+    OrgDb = org_db
+  )
+
+  # Merge with original data frame
+  enrichment_df <- gene_map_entrez %>%
+    inner_join(
+      gene_df %>% dplyr::select(all_of(c("gene_name.x", ranking_col))),
+      by = c("SYMBOL" = "gene_name.x")
+    )
+  # Identify duplicates
+  duplicates <- enrichment_df %>%
+    group_by(ENTREZID) %>%
+    filter(n() > 1) %>%
+    ungroup()
+
+  if (nrow(duplicates) > 0) {
+    message("Warning: Duplicates detected in Entrez IDs (will only keep first occurence): ", paste(unique(duplicates$ENTREZID), collapse = ", "))
+  }
+  # Remove duplicates: Keep the first occurrence per ENTREZID
+  enrichment_df <- enrichment_df %>%
+    distinct(ENTREZID, .keep_all = TRUE)
+  
+  # Create ranked gene list for enrichment analysis
+  ranked_gene_list <- enrichment_df[[ranking_col]]
+  names(ranked_gene_list) <- enrichment_df$ENTREZID
+  ranked_gene_list <- sort(ranked_gene_list, decreasing = TRUE)
+
+  return(list(
+    gene_list = ranked_gene_list,
+    enrichment_df = enrichment_df,
+    duplicates = duplicates))
+}
+
+```
+
+run function on all groups and timepoints
+
+```{r}
+library(purrr)
+# Apply function to all datasets
+#processed_results <- purrr::map(vaccine_data_list, ~ map(.x, convert_and_rank_genes))
+
+# Extra code to do the same thing since purrr sometimes does not work as expected
+safe_convert_and_rank <- function(df) {
+  tryCatch({
+    convert_and_rank_genes(df)
+  }, error = function(e) {
+    message("Error: ", conditionMessage(e))
+    return(NULL)
+  })
+}
+
+processed_results <- lapply(vaccine_data_list, function(group) {
+  lapply(group, function(df) {
+    safe_convert_and_rank(df)
+  })
+})
+
+
+```
+
+```{r}
+#| eval: false
+# Save processed_results as an Rds file
+saveRDS(processed_results, file = paste0(result.dir, "processed_results_", Sys.Date(), ".rds"))
+```
+
+## WikiPathways GSEA results
+
+WikiPathways gene set enrichment analysis
+
+```{r}
+set.seed(123)
+# run gseWikipathways for each group and time point
+#wiki_gse_results <- map(processed_results, ~ map(.x, ~ gseWP(.x$gene_list, organism = "Homo sapiens")))
+
+# same thing as above but without using purrr
+wiki_gse_results <- lapply(names(processed_results), function(group_name) {
+  group <- processed_results[[group_name]]
+
+  lapply(names(group), function(timepoint) {
+    result <- group[[timepoint]]
+
+    if (!is.null(result)) {
+      gseWP(result$gene_list, organism = "Homo sapiens")
+    } else {
+      NULL
+    }
+  }) |> setNames(names(group))
+}) |> setNames(names(processed_results))
+```
+
+save GSEA results
+
+```{r}
+#| eval: false
+# Save processed_results as an Rds file
+saveRDS(wiki_gse_results, file = paste0(result.dir, "wiki_gsea_results_", Sys.Date(), ".rds"))
+```
+
+### Heatmap all pathways
+
+```{r}
+# Extract and reshape NES values
+combined_wiki_df <- do.call(rbind, lapply(names(wiki_gse_results), function(group_name) {
+    do.call(rbind, lapply(names(wiki_gse_results[[group_name]]), function(timepoint) {
+        data <- wiki_gse_results[[group_name]][[timepoint]][, c("Description", "NES")]
+        data$dataset <- paste(group_name, timepoint, sep = "_")
+        return(data)
+    }))
+}))
+
+# Reshape for heatmap
+heatmap_data <- combined_wiki_df %>%
+    tidyr::pivot_wider(names_from = dataset, values_from = NES, values_fill = 0) %>%
+    tibble::column_to_rownames("Description")
+
+# Convert row names to a column, filter, and then remove "TBA" rows
+heatmap_data <- heatmap_data %>%
+    rownames_to_column("module") %>%          # Convert row names to a column named "module"
+    filter(!str_detect(module, "TBA")) %>%    # Filter out rows where "module" contains "TBA"
+    column_to_rownames("module")              # Convert the "module" column back to row names
+```
+
+```{r}
+# Define a diverging color palette with blue for negative and red for positive values
+my_palette <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(20)
+
+# Define breaks to distinguish between negative, zero, and positive NES values
+breaks <- seq(-3, 3, length.out = 21)
+
+# Open PDF to save the improved heatmap with diverging colors
+pdf(file = paste0(figures.dir, "heatmap_wiki.pdf"), height = 20, width = 8)
+
+# Plot the heatmap with the diverging color palette and defined breaks
+pheatmap(
+    heatmap_data,
+    color = my_palette,
+    breaks = breaks,
+    cluster_rows = TRUE,
+    cluster_cols = FALSE,
+    cellwidth = 15,
+    cellheight = 10,
+    border_color = "black",
+    fontsize_row = 9,
+    fontsize_col = 9,
+    angle_col = "45", 
+    main = "Wiki pathways GSEA Enrichment Heatmap"
+)
+
+# Close PDF device to save the plot
+dev.off()
+
+```
+
+### Single pathway enrichment
+
+Pathway enrichment for specific pathways
+
+```{r}
+library(rWikiPathways)
+library(BridgeDbR)
+```
+
+#### Running score plot
+
+```{r}
+# pathway_id <- "WP364"  # IL6
+# pathway_label <- "IL6"
+
+
+pathway_id <- "WP205" # For IL7
+pathway_label <- "IL7"
+
+# extract module genes
+pathway_entrez <- getXrefList(pathway_id, BridgeDbR::getSystemCode("Entrez Gene"))
+```
+
+check which genes are in the IL6 pathway and which ones you find in the dataset
+
+```{r}
+group <- "group2"
+timepoint <- "boost"
+
+# Check which genes are found in the gene list out of the entire pathway
+pathway <- processed_results[[group]][[timepoint]][["enrichment_df"]] %>%
+  filter(ENTREZID %in% pathway_entrez) # so 38 of 43 genes in the pathway can be found for this timepoint
+
+# extract after doing the GSEA analysis with wikipathways
+core_enrichment <- wiki_gse_results[[group]][[timepoint]]@result %>%
+  filter(ID == "WP364") %>%
+  pull(core_enrichment) %>%
+  strsplit(split = "/") %>%
+  unlist() %>%
+  as.data.frame() # core_enrichment gives the subset of genes that contributed most to the enrichment score (from the leading edge of the ranked list).
+
+colnames(core_enrichment) <- c("ENTREZID")
+
+num_matching_genes <- core_enrichment %>%
+  filter(ENTREZID %in% pathway$ENTREZID)
+
+print(num_matching_genes)
+
+# So all of the  core enrichment column from the wiki GSEA exist in the IL6 pathway that I got from BridgeDbR
+```
+
+```{r}
+plot_title <- paste("GSEA -", pathway_label, "Pathway:", group, timepoint)
+file_name <- paste0(figures.dir, "GSEA_", pathway_label, "_", group, "_", timepoint, ".pdf")
+
+pdf(file = file_name, width = 7, height = 6)  
+
+gseaplot2(
+  wiki_gse_results[[group]][[timepoint]], 
+  geneSetID = pathway_id, 
+  title = plot_title
+)
+
+dev.off()
+```
+
+```{r}
+# filter IL6 pathway for core enriched genes
+filtered_core_pathway <- pathway %>%
+  semi_join(core_enrichment, by = "ENTREZID")
+```
+
+### Supplemental Figure 3B
+
+#### Single pathway heatmap
+
+```{r}
+# Get Entrez IDs pathway genes
+entrez_ids <- getXrefList(pathway_id, BridgeDbR::getSystemCode("Entrez Gene"))
+
+# Define all groups and timepoints
+groups <- names(processed_results)
+timepoints <- names(processed_results[[1]])
+```
+
+```{r}
+# Loop through all group-timepoint combinations
+fc_long <- map_dfr(groups, function(group) {
+  map_dfr(timepoints, function(tp) {
+    
+    df <- processed_results[[group]][[tp]][["enrichment_df"]]
+    
+    df %>%
+      filter(ENTREZID %in% entrez_ids) %>%
+      mutate(
+        condition = paste(group, tp, sep = "_")
+      ) %>%
+      dplyr::select(condition, SYMBOL, ENTREZID, log2FoldChange)
+  })
+})
+```
+
+```{r}
+# Extract core enrichment genes across all conditions
+core_genes <- map_dfr(groups, function(group) {
+  map_dfr(timepoints, function(tp) {
+    wiki_gse_results[[group]][[tp]]@result %>%
+      filter(ID == pathway_id) %>%
+      pull(core_enrichment) %>%
+      strsplit("/") %>%
+      unlist() %>%
+      tibble(
+        ENTREZID = .,
+        condition = paste(group, tp, sep = "_")
+      )
+  })
+})
+
+# Annotate core enrichment in long data
+fc_long <- fc_long %>%
+  mutate(core = ifelse(paste(condition, ENTREZID) %in% paste(core_genes$condition, core_genes$ENTREZID), "core", "non-core"))
+
+# Extract NES values for IL6 (WP364) from all GSEA results
+nes_df <- map_dfr(groups, function(group) {
+  map_dfr(timepoints, function(tp) {
+    nes_val <- wiki_gse_results[[group]][[tp]]@result %>%
+      filter(ID == pathway_id) %>%
+      pull(NES)
+    
+    tibble(
+      condition = paste(group, tp, sep = "_"),
+      NES = ifelse(length(nes_val) > 0, nes_val, NA)  # handle missing cases
+    )
+  })
+})
+
+# Join NES values to the long data
+fc_long <- fc_long %>%
+  left_join(nes_df, by = "condition")
+
+fc_long <- fc_long %>%
+  mutate(NES_label = paste0(condition, "\nNES=", round(NES, 2)))
+
+# Compute average log2FC per gene
+symbol_order <- fc_long %>%
+  group_by(SYMBOL) %>%
+  summarise(mean_fc = mean(log2FoldChange, na.rm = TRUE)) %>%
+  arrange(desc(mean_fc)) %>%
+  pull(SYMBOL)
+
+# Set SYMBOL as a factor with desired order
+fc_long <- fc_long %>%
+  mutate(SYMBOL = factor(SYMBOL, levels = symbol_order))
+
+# Save the ordered gene list
+ordered_pathway_genes <- levels(fc_long$SYMBOL)
+```
+
+```{r}
+p <- ggplot(fc_long, aes(x = SYMBOL, y = NES_label, fill = log2FoldChange)) +
+  geom_tile(color = "white") +
+  geom_point(data = filter(fc_long, core == "core"),
+             aes(x = SYMBOL, y = NES_label),
+             shape = 21, size = 2, stroke = 0.8, color = "black", fill = NA) +
+  scale_fill_gradient2(low = "#2062A6", mid = "white", high = "#E1413B", midpoint = 0,
+                       name = "log2FC") +
+  theme_minimal(base_size = 12) +
+  labs(
+    title =paste(pathway_label, "Pathway Genes Across Groups and Timepoints"),
+    x = "Gene Symbol", y = ""
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  ) 
+
+# Save the plot
+ggsave(
+  filename = paste0(figures.dir, pathway_label, "_NES_pathway_heatmap.pdf"),
+  plot = p,
+  width = 10, height = 6, units = "in"
+)
+
+p
+```
+
+flip genes and labels and change cell size
+
+```{r}
+# Order genes by average log2FC descending
+symbol_order <- fc_long %>%
+  group_by(SYMBOL) %>%
+  summarise(mean_fc = mean(log2FoldChange, na.rm = TRUE)) %>%
+  arrange(desc(mean_fc)) %>%
+  pull(SYMBOL)
+
+# Apply new order to SYMBOL
+fc_long <- fc_long %>%
+  mutate(SYMBOL = factor(SYMBOL, levels = symbol_order))
+
+# Plot with genes sorted top to bottom (descending)
+p <- ggplot(fc_long, aes(x = NES_label, y = SYMBOL, fill = log2FoldChange)) +
+  geom_tile(color = "white") +
+  geom_point(
+    data = filter(fc_long, core == "core"),
+    aes(x = NES_label, y = SYMBOL),
+    shape = 21, size = 2, stroke = 0.8, color = "black", fill = NA
+  ) +
+  scale_fill_gradient2(
+    low = "#2062A6", mid = "white", high = "#E1413B", midpoint = 0,
+    name = "log2FC"
+  ) +
+  scale_y_discrete(limits = rev(levels(fc_long$SYMBOL))) +  # <- DESCENDING order
+  theme_minimal(base_size = 12) +
+  labs(
+    title = paste(pathway_label, "Pathway Genes Across Groups and Timepoints"),
+    x = "", y = "Gene Symbol"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 0, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    panel.grid = element_blank(),
+    axis.title.y = element_text(face = "bold"),
+    axis.title.x.top = element_text(face = "bold"),
+    axis.text.x.top = element_text(size = 10),
+    axis.ticks = element_line()
+  ) +
+  scale_x_discrete(position = "top")  # Put x-axis on top +
+  coord_fixed(ratio = 0.3)  # Adjust ratio to change shape
+
+ggsave(
+  filename = paste0(figures.dir, pathway_label, "_NES_pathway_heatmap_rotated_flipped.pdf"),
+  plot = p,
+  width = 8, height = 10, units = "in"
+)
+
+p
+```
+
+set new labels for plotting
+
+```{r}
+new_labels <- c(
+  "group1_primary" = "Unmodified 160µg – Primary",
+  "group1_boost"   = "Unmodified 160µg – Boost",
+  "group2_primary" = "Modified 400µg – Primary",
+  "group2_boost"   = "Modified 400µg – Boost",
+  "group3_primary" = "Modified 800µg – Primary",
+  "group3_boost"   = "Modified 800µg – Boost"
+)
+```
+
+```{r}
+p <- ggplot(fc_long, aes(x = SYMBOL, y = condition, fill = log2FoldChange)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "#2062A6", mid = "white", high = "#E1413B", midpoint = 0,
+                       name = "log2FC") +
+  theme_minimal(base_size = 12) +
+  labs(
+    title =paste(pathway_label, "Pathway Genes Across Groups and Timepoints"),
+    x = "Gene Symbol", y = ""
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  ) + 
+  scale_y_discrete(labels = new_labels)
+
+# Save the plot
+ggsave(
+  filename = paste0(figures.dir, pathway_label, "pathway_heatmap.pdf"),
+  plot = p,
+  width = 10, height = 6, units = "in"
+)
+
+p
+```
+
+```{r}
+session_info_path <- file.path(result.dir, "session_info.txt")
+
+writeLines(capture.output(sessionInfo()), session_info_path)
+```
