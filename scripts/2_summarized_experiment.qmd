@@ -1,0 +1,183 @@
+---
+title: "curevac_study"
+author: "Gustav Joas"
+format: html
+editor: visual
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+---
+
+# Create summarized experiment
+
+### Load packages
+
+```{r}
+#| label: load-packages
+#| includes: FALSE
+
+suppressPackageStartupMessages({
+  library(tximport)
+  library(readr)
+  library(ensembldb)
+  library(AnnotationDbi)
+  library(dplyr)
+  library(biomaRt)
+  library(SummarizedExperiment)
+  library(tidySummarizedExperiment)
+})
+
+```
+
+## 1. Load Data
+
+```{r}
+# Define base input directories
+tximport_dir <- "output/tximport"
+metadata_dir <- "data/metadata"
+annotation_dir <- "output/1_gene_annotation"
+
+# Load files using file.path()
+txi <- readRDS(file.path(tximport_dir, "txi.rds"))
+counts <- txi$counts
+
+sample_metadata <- readRDS(file.path(metadata_dir, "metadata_samples.rds")) %>% as.data.frame()
+
+gene_annotations <- readRDS(file.path(annotation_dir, "gene_annotations.rds"))
+mcols(gene_annotations)$entrezid <- as.character(mcols(gene_annotations)$entrezid) # Convert entrezid from list to character vector
+```
+
+## 2. Prepare data for Summarized Experiment
+
+Match the order of samples between counts and sample_metadata
+
+```{r}
+# Ensure the row names of sample metadata match the column names in counts
+rownames(sample_metadata) <- sample_metadata$NGI_sampleID
+sample_metadata <- sample_metadata %>% dplyr::select(-NGI_sampleID)
+
+# Check if the sample names (columns of counts) match the row names of sample_metadata
+all.equal(colnames(counts), rownames(sample_metadata))
+
+# If they do not match, reorder the sample_metadata to match the counts
+if (!all.equal(colnames(counts), rownames(sample_metadata))) {
+    tempindex <- match(colnames(counts), rownames(sample_metadata))
+    sample_metadata <- sample_metadata[tempindex, ]
+}
+
+# Re-check to make sure they match
+stopifnot(all.equal(colnames(counts), rownames(sample_metadata)))
+```
+
+Match the order of genes between counts and gene annotations
+
+```{r}
+# Check if the gene names (rows of counts) match the row names of gene_annotations
+all.equal(rownames(counts), names(gene_annotations))
+
+# If they do not match, reorder the gene_annotations to match the counts
+if (!identical(rownames(counts), names(gene_annotations))) {
+    # If they are not identical, reorder gene_annotations to match counts
+    tempindex <- match(rownames(counts), names(gene_annotations))
+    gene_annotations <- gene_annotations[tempindex]
+}
+
+# Re-check to make sure they match
+stopifnot(all.equal(rownames(counts), names(gene_annotations)))
+all.equal(rownames(counts), names(gene_annotations))
+```
+
+## 3. Create the Summarized Experiment Object
+
+```{r}
+# Create SummarizedExperiment using GRanges object
+se <- SummarizedExperiment(
+    assays = list(counts = as.matrix(txi$counts)),  # Matrix of counts
+    rowRanges = gene_annotations,               # Use the GRanges object directly
+    colData = sample_metadata                           # Metadata for samples (columns)
+)
+
+dim(se)
+summary(se)
+```
+
+## 4. Modify the Summarized Experiment Object for downstream analysis
+
+Filter for only protein coding genes or mitochondrial/ribosomic genes since they are needed for gene ontology analysis. Ribosomal indicating increased translation and mitochondrial for apoptosis.
+
+```{r}
+# Check the unique gene biotypes in the gene annotations and their frequencies
+table(rowData(se)$gene_biotype)
+dim(se)
+summary(se)
+
+# Define the biotypes you want to filter for
+target_biotypes <- c("protein_coding", "Mt_rRNA", "rRNA")
+
+# Filter the SummarizedExperiment object for the selected biotypes
+se <- se[rowData(se)$gene_biotype %in% target_biotypes, ]
+
+# Re-check the unique gene biotypes in the filtered SummarizedExperiment
+table(rowData(se)$gene_biotype)
+dim(se)
+summary(se)
+```
+
+Change counts data from double to integer
+
+```{r}
+# Extract the assay data, round it, and convert it to an integer matrix
+ assay_data <- round(assay(se))  # Round the values
+storage.mode(assay_data) <- "integer"  # Convert to integer storage mode
+
+
+# Reassign the modified data back to the SummarizedExperiment object
+# Use `withDimnames = FALSE` to ensure R does not try to match names unnecessarily
+assay(se, withDimnames = TRUE) <- assay_data
+
+# remove temporary assay data
+rm(assay_data)
+```
+
+Make better sample IDs that show group, animal_ID, and timepoint
+
+```{r}
+se$label <- paste(se$group, se$animal_ID, se$timepoint, sep = "_")
+colnames(se) <- se$label
+se$label
+```
+
+Order samples by group, timepoint
+
+```{r}
+# Create a combined factor based on timepoint and group
+se$order_factor <- factor(paste(se$group, se$timepoint, sep = "_"))
+
+# Check if the factor levels are in the desired order
+levels(se$order_factor)
+
+# Reorder the rows of the SummarizedExperiment object based on the combined factor
+se <- se[, order(se$order_factor)]
+
+# Remove the temporary order factor
+se$order_factor <- NULL
+
+# Also factor the Label column to keep in order in plots:
+se$label <- factor(se$label, levels = se$label)
+```
+
+## 5. Save the Summarized Experiment Object
+
+```{r}
+output_dir <- "output/2_summarized_experiment"
+
+# Create the directory if it doesn't exist
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+# Save files
+saveRDS(se, file.path(output_dir, "se.rds"))
+
+```
+
+```{writeLines(capture.output(sessionInfo()), file.path(output_dir, "session_info.txt"))}
+```
