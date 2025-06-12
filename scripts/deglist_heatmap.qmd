@@ -1,0 +1,180 @@
+---
+title: "DEG list and heatmap"
+author: "Gustav Joas"
+format: html
+editor: visual
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+---
+
+```{r, global.options, include=FALSE}
+# Global knitr settings 
+# Set up figures and chunks messages
+
+knitr::opts_knit$set(
+  echo = TRUE,
+  root.dir = getwd(),
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H",
+  warning = FALSE,
+  message = FALSE
+)
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H"
+)
+
+
+result.dir <- paste0("output/deglist_heatmap/", Sys.Date(), "/")
+figures.dir <- paste0(result.dir, "figures/")
+
+# Create result.dir with date if not existent
+ifelse(isFALSE(dir.exists(result.dir)),
+  dir.create(result.dir, recursive = TRUE),
+  "Result directory for today exists already!"
+)
+
+# Create figures.dir with date if not existent
+ifelse(isFALSE(dir.exists(figures.dir)),
+  dir.create(figures.dir, recursive = TRUE),
+  "Figures directory for today exists already!"
+)
+
+options(stringsAsFactors = FALSE)
+```
+
+## Load packages
+
+```{r}
+#| label: load-packages
+#| include: false
+
+suppressPackageStartupMessages({
+      library(dplyr)
+      library(stringr)    
+      library(readr)
+      library(tibble)
+      library(purrr)
+      library(pheatmap)
+      library(gt)  
+      library(webshot2)
+      library(RColorBrewer)
+})
+```
+
+## Load data
+
+```{r}
+vaccine_data_list <- readRDS("output/4_deseq_analysis/2024-11-01/vaccine_data_list.rds")
+
+```
+
+```{r}
+#| evaluate: false
+# Save the full DESeq results list as an compressed RDS
+saveRDS(vaccine_data_list, file = file.path(result.dir, "full_DESeq_results_all_genes.rds"), compress = "xz")
+```
+
+Total DEG List for Supplement
+
+```{r}
+combined_deg_list <- purrr::map_dfr(names(vaccine_data_list), function(group) {
+  purrr::map_dfr(names(vaccine_data_list[[group]]), function(tp) {
+    df <- vaccine_data_list[[group]][[tp]]
+    
+    df %>%
+      dplyr::filter(padj < 0.05) %>%
+      dplyr::mutate(group = group, timepoint = tp)
+  })
+})
+```
+
+```{r}
+#| evaluate: false
+# Save combined DESeq results list
+saveRDS(combined_deg_list, file = file.path(result.dir, "full_DESeq_results_DEGs.rds"))
+# Save as tsv
+write_tsv(combined_deg_list, file = paste0(result.dir, "full_DESeq_results_DEGs.tsv"))
+```
+
+```{r}
+# write.csv(combined_deg_list, file = paste0(result.dir, "Supplement_DEG_list.csv"), row.names = FALSE)
+```
+
+```{r}
+top_100_degs_unfiltered <- combined_deg_list %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = 100) %>%
+  dplyr::select(gene_name, description, log2FoldChange)
+```
+
+```{r}
+top_100_degs <- combined_deg_list %>%
+  filter(!is.na(gene_name)) %>%                                # Remove NAs
+  arrange(desc(abs(log2FoldChange))) %>%                       # Sort by abs(log2FC) first
+  distinct(gene_name, .keep_all = TRUE) %>%                    # Then keep top entry per gene
+  slice_head(n = 100) %>%
+  dplyr::select(gene_name, description, log2FoldChange)
+```
+
+```{r}
+write.csv(top_100_degs, file = paste0(result.dir, "Supplement_Top100_DEGs.csv"), row.names = FALSE)
+```
+
+## Heatmap of top 100 DEGs
+
+### Supplemental Figure S4
+
+```{r}
+# Step 1: Prepare top 100 gene names
+top_100_genes <- top_100_degs$gene_name
+
+# Step 2: Create a combined ID for each condition (e.g. group1_primary)
+combined_deg_list <- combined_deg_list %>%
+  mutate(condition = paste(group, timepoint, sep = "_"))
+
+# Step 3: Filter and pivot
+top100_wide <- combined_deg_list %>%
+  filter(gene_name %in% top_100_genes) %>%
+  dplyr::select(gene_name, condition, log2FoldChange) %>%
+  tidyr::pivot_wider(names_from = condition, values_from = log2FoldChange)
+
+# Step 4: Turn into matrix with gene names as rownames
+top100_matrix <- as.matrix(top100_wide[,-1])  # Drop gene_name column
+rownames(top100_matrix) <- top100_wide$gene_name
+
+top100_matrix[is.na(top100_matrix)] <- 0
+```
+
+```{r}
+# Determine the max absolute log2FC value for symmetric scaling
+max_abs_val <- max(abs(top100_matrix))
+
+# Define a symmetric color scale centered at 0
+breaks <- seq(-max_abs_val, max_abs_val, length.out = 21)
+my_palette <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(length(breaks) - 1)
+
+pdf(file = paste0(figures.dir, "top100_DEGs_heatmap_centered.pdf"), height = 10, width = 8)
+
+pheatmap::pheatmap(
+  top100_matrix,
+  scale = "none",
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  fontsize_row = 6,
+  fontsize_col = 10,
+  color = my_palette,
+  breaks = breaks,  # Set symmetric color scale
+  border_color = "black",
+  cellwidth = 12,
+  cellheight = 5,
+  main = "Top 100 DEGs (Centered Color Scale)"
+)
+
+dev.off()
+```
