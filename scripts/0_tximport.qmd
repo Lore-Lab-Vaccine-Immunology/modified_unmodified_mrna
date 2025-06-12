@@ -1,0 +1,82 @@
+---
+title: "tximport"
+author: "Gustav Joas"
+format: html
+editor: visual
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+---
+
+# Create SummarizedExperiment from Transcript-Level Estimates
+
+### Load packages
+
+```{r}
+#| label: load-packages
+#| includes: FALSE
+
+# Packages for tximport
+suppressPackageStartupMessages({
+  library(tximport)
+  library(readr)
+  library(ensembldb)
+  library(AnnotationDbi)
+  library(dplyr)
+  library(biomaRt)
+  library(SummarizedExperiment)
+  library(tidySummarizedExperiment)
+})
+
+```
+
+## 1. Import transcript abundance with tximport
+
+**Purpose of tximport**:
+
+tximport is used to import transcript-level abundance estimates (from tools like Salmon or Kallisto) and summarize them to gene-level counts. This step allows for more accurate gene-level expression analysis, correcting for factors like transcript length and isoform usage.
+
+Set Up Paths for Quantification Files
+
+```{r}
+dir <- "data/nf_core/Mmul10/raw_data/"
+files <- list.files(path = dir, pattern = "quant.sf", full.names = TRUE, recursive = TRUE)
+```
+
+Extract Sample Names
+
+```{r}
+# Extract sample names from the directory structure (assuming the sample name is in the directory name)
+sample_names <- basename(dirname(files))
+
+names(files) <- sample_names
+```
+
+Load transcript to mapping (tx2gene)
+
+```{r}
+# Define the path to the tx2gene.tsv file relative to the quant.sf directory
+tx2gene_path <- file.path(dirname(dir), "tx2gene.tsv")
+
+# Load the tx2gene file
+tx2gene <- readr::read_tsv(tx2gene_path, col_names = c("TXNAME", "GENEID", "GENESYMBOL"))
+```
+
+Import quantification data and summarize to gene level
+
+This step uses the tximport() function to load the transcript-level abundance estimates and summarize them to gene-level counts using the tx2gene mapping.
+
+```{r}
+# Import transcript-level abundance estimates and summarize to gene level
+txi <- tximport(files, type = "salmon", tx2gene = tx2gene)
+```
+
+```{r}
+# Save the summarized tximport object for downstream analysis
+output_dir <- "output/tximport"
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+# Save the txi object
+saveRDS(txi, file.path(output_dir, "txi.rds"))
+
+# Save the session info
+writeLines(capture.output(sessionInfo()), file.path(output_dir, "session_info.txt"))
+```
