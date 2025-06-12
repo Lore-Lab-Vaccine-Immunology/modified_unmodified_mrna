@@ -1,0 +1,96 @@
+---
+title: "ensdb gene annotation extraction"
+format: html
+---
+## 1. Load Packages
+
+```{r}
+library(AnnotationHub)
+library(ensembldb)
+```
+## 2. Query AnnotationHub for Macaca mulatta EnsDb
+
+```{r}
+# Create AnnotationHub object and query for EnsDb databases
+ah <- AnnotationHub()
+
+query_result <- query(ah, c("Macaca mulatta", "EnsDb"))
+
+# Load the appropriate EnsDb object for Macaca mulatta 
+ensdb_mmulatta <- query_result[["AH116891"]]
+```
+
+## 3. Explore the EnsDb Object
+```{r}
+ensdb_mmulatta
+metadata(ensdb_mmulatta)
+# List all available columns in the EnsDb object
+columns(ensdb_mmulatta)
+```
+
+## 4. Extract Gene-Level Annotations
+```{r}
+# Extract gene-level data from the EnsDb object
+gene_annotations <- genes(ensdb_mmulatta)
+
+# Check how many genes are in the dataset
+length(gene_annotations)
+
+# Inspect the first few gene entries
+head(gene_annotations)
+
+# View the metadata columns included in the GRanges object
+mcols(gene_annotations)
+```
+
+## 5.Retrieve the Desired Metadata
+
+```{r}
+# Retrieve additional gene annotation information from the EnsDb object
+gene_info <- AnnotationDbi::select(ensdb_mmulatta, 
+                    keys = keys(ensdb_mmulatta, keytype = "GENEID"), 
+                    columns = c("DESCRIPTION", "CANONICALTRANSCRIPT"), 
+                    keytype = "GENEID")
+```
+
+## 6. Match Metadata and Add to GRanges
+```{r}
+# Check if the gene IDs from the new annotations match the GRanges object
+identical(mcols(gene_annotations)$gene_id, gene_info$GENEID)
+```
+
+```{r}
+# Identify gene IDs that do not match
+missing_in_gene_annotations <- setdiff(gene_info$GENEID, mcols(gene_annotations)$gene_id)
+missing_in_gene_info <- setdiff(mcols(gene_annotations)$gene_id, gene_info$GENEID)
+
+# View the missing IDs
+missing_in_gene_annotations
+missing_in_gene_info
+
+# Reorder gene_info to match the order of gene_annotations
+gene_info_ordered <- gene_info[match(mcols(gene_annotations)$gene_id, gene_info$GENEID), ]
+```
+
+Add Metadata to Your GRanges Object
+```{r}
+# Add extra gene annotation to your GRanges object
+mcols(gene_annotations)$description <- gene_info_ordered$DESCRIPTION
+mcols(gene_annotations)$canonical_transcript <- gene_info_ordered$CANONICALTRANSCRIPT
+mcols(gene_annotations)
+```
+
+## 7. Save Annotated GRanges Object
+
+```{r}
+output_dir <- "output/1_gene_annotation"
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+# Save the updated gene annotations object
+saveRDS(gene_annotations, file = file.path(output_dir, "gene_annotations.rds"))
+```
+
+```{r}
+writeLines(capture.output(sessionInfo()), file.path(output_dir, "session_info.txt"))
+```
+
