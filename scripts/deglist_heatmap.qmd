@@ -70,8 +70,29 @@ suppressPackageStartupMessages({
 ## Load data
 
 ```{r}
-vaccine_data_list <- readRDS("output/4_deseq_analysis/2024-11-01/vaccine_data_list.rds")
+# Define the common base path for all files, which is the output directory for DESeq analysis
+base_path <- "output/4_deseq_analysis/"
 
+# Define file paths for each group and time point, appending to the base path
+group_data_paths <- list(
+    group1 = list(
+        primary = paste0(base_path, "timepoint_24_primary_vs_0_primary_group_1.csv"),
+       boost = paste0(base_path, "timepoint_24_boost_vs_0_primary_group_1.csv")
+    ),
+    group2 = list(
+        primary = paste0(base_path, "timepoint_24_primary_vs_0_primary_group_2.csv"),
+        boost = paste0(base_path, "timepoint_24_boost_vs_0_primary_group_2.csv")
+    ),
+    group3 = list(
+        primary = paste0(base_path, "timepoint_24_primary_vs_0_primary_group_3.csv"),
+        boost = paste0(base_path, "timepoint_24_boost_vs_0_primary_group_3.csv")
+    )
+)
+
+# Load all data into a nested list
+vaccine_data_list <- lapply(group_data_paths, function(group) {
+    lapply(group, read_csv)
+})
 ```
 
 ```{r}

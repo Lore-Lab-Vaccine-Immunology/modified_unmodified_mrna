@@ -30,7 +30,7 @@ knitr::opts_chunk$set(
 )
 
 
-result.dir <- paste0("output/6_DEG_comparison/", Sys.Date(), "/")
+result.dir <- paste0("output/5_DEG_comparison/", Sys.Date(), "/")
 figures.dir <- paste0(result.dir, "figures/")
 
 # Create result.dir with date if not existent
@@ -72,7 +72,7 @@ suppressPackageStartupMessages({
 Result from DESEq2.
 
 ```{r}
-# Define the common base path for all files
+# Define the common base path for all files, use output from deseq analysis
 base_path <- "output/4_deseq_analysis/"
 
 # Define file paths for each group and time point, appending to the base path

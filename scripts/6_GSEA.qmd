@@ -74,10 +74,8 @@ suppressPackageStartupMessages({
 
 ## Load data
 
-The data here was filtered for genes with a lfcThreshold of 1.
-
 ```{r}
-# Define the common base path for all files
+# Define the common base path for all files, which is the output directory for DESeq analysis
 base_path <- "output/4_deseq_analysis/"
 
 # Define file paths for each group and time point, appending to the base path
@@ -115,7 +113,7 @@ GSEA using Blood Transcriptome modules presented in [Li et al. 2014](10.1038/ni.
 run_gsea <- function(data, gene_set) {
     # Prepare the ranked gene list based on log2 fold change
     ranked_gene_list <- data$log2FoldChange
-    names(ranked_gene_list) <- data$gene_name.x  # Use the column that matches BTM identifiers
+    names(ranked_gene_list) <- data$gene_name  # Use the column that matches BTM identifiers
     ranked_gene_list <- sort(ranked_gene_list, decreasing = TRUE)
     
     # Run GSEA with BTM gene sets
@@ -275,8 +273,8 @@ convert_and_rank_genes <- function(gene_df,
   # Merge with original data frame
   enrichment_df <- gene_map_entrez %>%
     inner_join(
-      gene_df %>% dplyr::select(all_of(c("gene_name.x", ranking_col))),
-      by = c("SYMBOL" = "gene_name.x")
+      gene_df %>% dplyr::select(all_of(c("gene_name", ranking_col))),
+      by = c("SYMBOL" = "gene_name")
     )
   # Identify duplicates
   duplicates <- enrichment_df %>%
@@ -331,7 +329,6 @@ processed_results <- lapply(vaccine_data_list, function(group) {
 ```
 
 ```{r}
-#| eval: false
 # Save processed_results as an Rds file
 saveRDS(processed_results, file = paste0(result.dir, "processed_results_", Sys.Date(), ".rds"))
 ```
@@ -364,7 +361,6 @@ wiki_gse_results <- lapply(names(processed_results), function(group_name) {
 save GSEA results
 
 ```{r}
-#| eval: false
 # Save processed_results as an Rds file
 saveRDS(wiki_gse_results, file = paste0(result.dir, "wiki_gsea_results_", Sys.Date(), ".rds"))
 ```
@@ -436,12 +432,12 @@ library(BridgeDbR)
 #### Running score plot
 
 ```{r}
-# pathway_id <- "WP364"  # IL6
-# pathway_label <- "IL6"
+pathway_id <- "WP364"  # IL6
+pathway_label <- "IL6"
 
 
-pathway_id <- "WP205" # For IL7
-pathway_label <- "IL7"
+# pathway_id <- "WP205" # For IL7
+# pathway_label <- "IL7"
 
 # extract module genes
 pathway_entrez <- getXrefList(pathway_id, BridgeDbR::getSystemCode("Entrez Gene"))

@@ -104,8 +104,8 @@ Choose which parameters to test
 ```{r}
 REFERENCE_TIME = "0_primary"    # Reference time level for releveling
 # REFERENCE_CONSTRUCT = "unmodified"  # Reference construct for filtering
-TEST <- se$group == "3" # Define the variable that controls the subset of data to test
-TEST_TEXT <- "group_3"  # Define the text to use in filenames
+TEST <- se$group == "1" # Define the variable that controls the subset of data to test
+TEST_TEXT <- "group_1"  # Define the text to use in filenames
 ```
 
 Prepare data for DESeq. Convert to factors.
@@ -228,20 +228,27 @@ for (result_name in result_names[-1]) {
     # Run the DESeq2 results function for the current comparison
     # lfcThreshold and altHypothesis="greaterAbs" to adjusts the null hypothesis to exclude genes with small fold changes
     res <- results(dds, name = result_name, lfcThreshold = 1, altHypothesis = "greaterAbs")
+    # res <- results(dds, name = result_name)
     
   # Apply lfcShrink to stabilize the log fold changes
     res_shrunk <- lfcShrink(dds, coef = result_name, res = res,  type = "apeglm")
+
     DESeq2::summary(res_shrunk)
-    
+
     # Store the shrunken result in the list with the custom name
     results_list[[result_name]] <- res_shrunk
+    
+    # Uncomment lines below to run without lfcShrink
+    # DESeq2::summary(res)
+    # 
+    # # Store the result in the list with the custom name
+    # results_list[[result_name]] <- res
 }
 ```
 
 ### Save results
 
 ```{r}
-#| eval=FALSE
 #| include: false
 
 # Convert the gene annotations to a data frame
@@ -251,7 +258,7 @@ for (result_name in names(results_list)) {
   
   # Convert the DESeq2 result to a data frame and make the rownames a column called 'gene_id'
   single_result <- as.data.frame(results_list[[result_name]])
-  #single_result <- tibble::rownames_to_column(single_result, var = "gene_id")
+  single_result <- tibble::rownames_to_column(single_result, var = "gene_id")
   
   # Merge the single_result with gene_annotations using 'gene_id' to ensure alignment
   combined_data <- merge(gene_annotations, single_result, by = "gene_id", all.y = TRUE)
@@ -301,7 +308,7 @@ ggsave(filename = paste0(figures.dir, "pvalue_distributions_facet.png"),
 pval_plot
 ```
 
-## Volcano plots
+## Volcano plots Figure 2A
 
 Extract gene names to DESeq2 result list to integrate into volcano plots.
 
@@ -324,37 +331,6 @@ for (result_name in names(results_list)) {
 
 # Check the output of the first modified result
 head(results_list[[1]])
-```
-
-Custom lists of genes to label in the volcano plots.
-
-```{r}
-# Define a list of genes to label to include in volcano plots
-  orebro_list <- c("RSAD2", "IFIT1", "CXCL10", "CMPK2", "GBP1P1", 
-                  "IFI44L", "BATF2", "SIGLEC1", "IFI44", "NDUFS4", 
-                  "MX1", "CXCL9", "FCGR1A", "FCGR1B", "CCL4")
-  
-# T helper cytokines list
-t_helper_list <- c(
-  "CSF2", "IFNG", "IL1B", "IL2", "IL4", "IL5", 
-  "IL6", "CXCL8", "IL10", "IL12A", "IL12B", "IL13", 
-  "IL17A", "IL18", "IL23A", "TNF"
-)
-
-# Cytokines list
-cytokines_list <- c(
-  "CD40LG", "CSF3", "IFNA6", "IFNA8", "IFNA10", "IFNA13", "IFNA14", "IFNA16", "IFNA21", "IL1RN", "IL7", "IL15"
-)
-
-# Chemokines list
-chemokines_list <- c(
-  "CXCL13", "CCL11", "CXCL10", 
-  "CXCL11", "CCL2", "CXCL9", 
-  "CCL3", "CCL4L1", "CCL4", "CXCL12"
-)
-
-# Combine the three lists into one
-combined_list <- c(t_helper_list, cytokines_list, chemokines_list)
 ```
 
 ```{r}
